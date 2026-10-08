@@ -1,4 +1,4 @@
-import type { Credentials } from './types';
+import type { Chat, Credentials, Message, MessageStatus } from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -24,11 +24,22 @@ export interface InstanceSettings {
   typeInstance: string;
   webhookUrl: string;
   incomingWebhook: string;
+  outgoingWebhook?: string;
+  outgoingAPIMessageWebhook?: string;
+  outgoingMessageWebhook?: string;
+}
+
+export interface AccountSettings {
+  chatId: string;
+  phone: string;
 }
 
 export interface GreenApi {
   getState(signal: AbortSignal): Promise<string>;
   getSettings(signal: AbortSignal): Promise<InstanceSettings>;
+  getAccountSettings(signal: AbortSignal): Promise<AccountSettings>;
+  getChats(signal: AbortSignal): Promise<Chat[]>;
+  getChatHistory(chatId: string, signal: AbortSignal): Promise<Message[]>;
   checkAccount(phone: string, signal: AbortSignal): Promise<string>;
   sendMessage(chatId: string, message: string, signal: AbortSignal): Promise<string>;
   receive(signal: AbortSignal): Promise<Notification | null>;
@@ -61,11 +72,69 @@ function protocolError(): ApiError {
   return new ApiError('GREEN-API вернул неожиданный ответ. Попробуйте еще раз.', 0, 'protocol');
 }
 
+function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+    };
+    const abort = () => { cleanup(); reject(new DOMException('Aborted', 'AbortError')); };
+    const timer = setTimeout(() => { cleanup(); resolve(); }, milliseconds);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
+function parseRemoteChats(value: unknown): Chat[] {
+  if (!Array.isArray(value)) throw protocolError();
+  const chats = new Map<string, Chat>();
+  for (const item of value) {
+    const data = record(item);
+    if (!data || data.type !== 'user') continue;
+    if (typeof data.chatId !== 'string' || !/^\d+$/.test(data.chatId)
+      || typeof data.name !== 'string') throw protocolError();
+    const phone = typeof data.phoneNumber === 'number' || typeof data.phoneNumber === 'string'
+      ? String(data.phoneNumber) : '';
+    chats.set(data.chatId, {
+      id: data.chatId, name: data.name || (phone !== '0' && phone ? `+${phone}` : data.chatId),
+      ...(/^[1-9]\d*$/.test(phone) ? { phone } : {}), messages: [],
+    });
+  }
+  return [...chats.values()];
+}
+
+function parseRemoteHistory(value: unknown, chatId: string): Message[] {
+  if (!Array.isArray(value)) throw protocolError();
+  const messages = new Map<string, Message>();
+  for (const item of value) {
+    const data = record(item);
+    if (!data || data.chatId !== chatId || data.chatType !== undefined && data.chatType !== 'user'
+      || data.isDeleted === true
+      || data.typeMessage !== 'textMessage' && data.typeMessage !== 'extendedTextMessage') continue;
+    const text = typeof data.textMessage === 'string' ? data.textMessage : record(data.extendedTextMessage)?.text;
+    if (typeof data.idMessage !== 'string' || !data.idMessage || typeof text !== 'string'
+      || data.type !== 'incoming' && data.type !== 'outgoing'
+      || typeof data.timestamp !== 'number' || !Number.isFinite(data.timestamp)
+      || data.timestamp < 0 || data.timestamp > 8.64e12) throw protocolError();
+    const status: MessageStatus = data.type === 'incoming' ? 'delivered'
+      : data.statusMessage === 'read' || data.statusMessage === 'delivered' || data.statusMessage === 'failed'
+        ? data.statusMessage : data.statusMessage === 'pending' ? 'queued'
+          : data.statusMessage === 'sent' || data.statusMessage === '' || data.statusMessage === undefined ? 'sent' : 'uncertain';
+    messages.set(data.idMessage, {
+      id: data.idMessage, chatId, direction: data.type, text, timestamp: data.timestamp * 1000, status,
+      ...(status === 'failed' ? { error: 'MAX не смог доставить сообщение.' } : {}),
+    });
+  }
+  return [...messages.values()].sort((first, second) => first.timestamp - second.timestamp);
+}
+
 export function createGreenApi(credentials: Credentials, baseUrl?: string): GreenApi {
   const configuredUrl = baseUrl ?? import.meta.env.VITE_GREEN_API_URL ?? 'https://api.green-api.com/v3';
   const url = configuredUrl.replace(/\/+$/, '');
   const instance = encodeURIComponent(credentials.idInstance);
   const token = encodeURIComponent(credentials.apiTokenInstance);
+  let historyQueue: Promise<unknown> = Promise.resolve();
+  let lastHistoryStart = 0;
 
   async function request(
     method: string,
@@ -121,7 +190,32 @@ export function createGreenApi(credentials: Credentials, baseUrl?: string): Gree
       const data = record(await request('getSettings', 'GET', signal));
       if (typeof data?.typeInstance !== 'string' || typeof data.webhookUrl !== 'string'
         || typeof data.incomingWebhook !== 'string') throw protocolError();
-      return { typeInstance: data.typeInstance, webhookUrl: data.webhookUrl, incomingWebhook: data.incomingWebhook };
+      return {
+        typeInstance: data.typeInstance, webhookUrl: data.webhookUrl, incomingWebhook: data.incomingWebhook,
+        ...(typeof data.outgoingWebhook === 'string' ? { outgoingWebhook: data.outgoingWebhook } : {}),
+        ...(typeof data.outgoingAPIMessageWebhook === 'string' ? { outgoingAPIMessageWebhook: data.outgoingAPIMessageWebhook } : {}),
+        ...(typeof data.outgoingMessageWebhook === 'string' ? { outgoingMessageWebhook: data.outgoingMessageWebhook } : {}),
+      };
+    },
+    async getAccountSettings(signal) {
+      const data = record(await request('getAccountSettings', 'GET', signal));
+      if (typeof data?.chatId !== 'string' || !/^\d+$/.test(data.chatId)
+        || typeof data.phone !== 'string' || !/^[1-9]\d*$/.test(data.phone)) throw protocolError();
+      return { chatId: data.chatId, phone: data.phone };
+    },
+    async getChats(signal) {
+      return parseRemoteChats(await request('getChats', 'GET', signal));
+    },
+    getChatHistory(chatId, signal) {
+      const task = historyQueue.catch(() => {}).then(async () => {
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        const delay = 1050 - (Date.now() - lastHistoryStart);
+        if (delay > 0) await wait(delay, signal);
+        lastHistoryStart = Date.now();
+        return parseRemoteHistory(await request('getChatHistory', 'POST', signal, { chatId, count: 100 }), chatId);
+      });
+      historyQueue = task;
+      return task;
     },
     async checkAccount(phone, signal) {
       const data = record(await request('checkAccount', 'POST', signal, { phoneNumber: Number(phone) }));

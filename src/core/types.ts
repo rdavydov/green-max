@@ -3,7 +3,7 @@ export interface Credentials {
   apiTokenInstance: string;
 }
 
-export type MessageStatus = 'sending' | 'queued' | 'delivered' | 'read' | 'failed' | 'uncertain';
+export type MessageStatus = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'uncertain';
 
 export interface Message {
   id: string;
@@ -25,7 +25,7 @@ export interface Chat {
 export interface PendingStatus {
   chatId: string;
   id: string;
-  status: 'delivered' | 'read' | 'failed';
+  status: 'sent' | 'delivered' | 'read' | 'failed';
   error?: string;
 }
 
@@ -41,9 +41,12 @@ export interface Messenger {
   busyChatIds: string[];
   connection: { status: 'online' | 'reconnecting' | 'storage-error'; message?: string };
   error: string | null;
+  notice?: string | null;
+  loadingChatIds?: string[];
   login(credentials: Credentials): Promise<boolean>;
   logout(): void;
   createChat(phone: string): Promise<string | null>;
+  loadChat(chatId: string): Promise<void>;
   sendMessage(chatId: string, text: string): Promise<boolean>;
   retry(): void;
   clearError(): void;

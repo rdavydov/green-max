@@ -39,7 +39,7 @@ export function incomingText(
   };
 }
 
-export function outgoingStatus(receiptId: number, idMessage: string, status: 'delivered' | 'read'): Notification {
+export function outgoingStatus(receiptId: number, idMessage: string, status: 'sent' | 'delivered' | 'read'): Notification {
   return {
     receiptId,
     body: {
@@ -58,6 +58,9 @@ export class GreenApiFixture {
   readonly sent: { chatId: string; message: string; idMessage: string }[] = [];
   readonly deleted: number[] = [];
   readonly requests: { action: string; method: string }[] = [];
+  chats: Record<string, unknown>[] = [];
+  readonly chatHistory = new Map<string, Record<string, unknown>[]>();
+  account = { chatId: '999', phone: '79990000000', stateInstance: 'authorized' };
   checkAccountDelayMs = 0;
   failNextSend = false;
   holdDeletes = false;
@@ -91,6 +94,17 @@ export class GreenApiFixture {
             webhookUrl: '',
           });
           break;
+        case 'getaccountsettings':
+          await this.json(route, this.account);
+          break;
+        case 'getchats':
+          await this.json(route, this.chats);
+          break;
+        case 'getchathistory': {
+          const { chatId } = request.postDataJSON() as { chatId: string };
+          await this.json(route, this.chatHistory.get(chatId) ?? []);
+          break;
+        }
         case 'checkaccount': {
           const { phoneNumber } = request.postDataJSON() as { phoneNumber: number | string };
           if (this.checkAccountDelayMs > 0) {

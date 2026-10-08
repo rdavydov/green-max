@@ -131,7 +131,7 @@ function NewChatDialog({ error, onCreate, onClose, onClearError }: { error: stri
   </div>;
 }
 
-const statusLabels: Record<MessageStatus, string> = { sending: 'Отправляется', queued: 'В очереди', delivered: 'Доставлено', read: 'Прочитано', failed: 'Не отправлено', uncertain: 'Отправка не подтверждена' };
+const statusLabels: Record<MessageStatus, string> = { sending: 'Отправляется', queued: 'В очереди', sent: 'Отправлено', delivered: 'Доставлено', read: 'Прочитано', failed: 'Не отправлено', uncertain: 'Отправка не подтверждена' };
 
 function MessageBubble({ message }: { message: Message }) {
   const outgoing = message.direction === 'outgoing';
@@ -141,14 +141,14 @@ function MessageBubble({ message }: { message: Message }) {
       <p className="message-text">{message.text}</p>
       <div className="message-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{timeFormatter.format(message.timestamp)}</time>
         {outgoing && <span className={`message-status status-${message.status}`} title={message.error || statusLabels[message.status]} aria-label={statusLabels[message.status]}>
-          {message.status === 'delivered' || message.status === 'read' ? <><span>{statusLabels[message.status]}</span><Icon name="double-check" /></> : message.status === 'queued' ? <><span>{statusLabels[message.status]}</span><Icon name="check" /></> : message.status === 'sending' ? '· · ·' : statusLabels[message.status]}
+          {message.status === 'delivered' || message.status === 'read' ? <><span>{statusLabels[message.status]}</span><Icon name="double-check" /></> : message.status === 'sent' ? <><span>{statusLabels[message.status]}</span><Icon name="check" /></> : message.status === 'sending' ? '· · ·' : statusLabels[message.status]}
         </span>}
       </div>
     </div>
   </div>;
 }
 
-function Conversation({ chat, draft, pending, onDraft, onSend, onBack }: { chat: Chat; draft: string; pending: boolean; onDraft: (value: string) => void; onSend: () => void; onBack: () => void }) {
+function Conversation({ chat, draft, pending, loading, onDraft, onSend, onBack }: { chat: Chat; draft: string; pending: boolean; loading: boolean; onDraft: (value: string) => void; onSend: () => void; onBack: () => void }) {
   const messageEnd = useRef<HTMLDivElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
@@ -179,7 +179,7 @@ function Conversation({ chat, draft, pending, onDraft, onSend, onBack }: { chat:
       <span className="conversation-badge">MAX</span>
     </header>
     <div className="messages" ref={messageList} role="log" aria-label="Сообщения" aria-live="polite" aria-relevant="additions">
-      {chat.messages.length === 0 ? <div className="conversation-start"><span><Icon name="chat" /></span><h3>Начните разговор</h3><p>Отправьте первое сообщение {chat.name}.</p></div> : chat.messages.map((message, index) => {
+      {chat.messages.length === 0 ? <div className="conversation-start"><span><Icon name="chat" /></span>{loading ? <p role="status">Загружаем сообщения…</p> : <><h3>Начните разговор</h3><p>Отправьте первое сообщение {chat.name}.</p></>}</div> : chat.messages.map((message, index) => {
         const previous = chat.messages[index - 1];
         const newDay = !previous || new Date(previous.timestamp).toDateString() !== new Date(message.timestamp).toDateString();
         return <div className="message-group" key={`${message.chatId}:${message.id}`}>
@@ -224,8 +224,13 @@ function ChatWorkspace({ messenger }: { messenger: Messenger }) {
   async function createChat(phone: string) {
     const chatId = await messenger.createChat(phone);
     if (!mounted.current) return null;
-    if (chatId) { setSelectedId(chatId); setNewChatOpen(false); messenger.clearError(); }
+    if (chatId) { selectChat(chatId); setNewChatOpen(false); messenger.clearError(); }
     return chatId;
+  }
+
+  function selectChat(chatId: string) {
+    setSelectedId(chatId);
+    void messenger.loadChat(chatId);
   }
 
   async function sendMessage() {
@@ -245,10 +250,12 @@ function ChatWorkspace({ messenger }: { messenger: Messenger }) {
       <header className="sidebar-header"><Brand /><button type="button" className="icon-button logout-button" onClick={logout} aria-label="Выйти" title="Выйти"><Icon name="logout" /></button></header>
       <div className="sidebar-heading"><h1>Сообщения</h1><span>{messenger.chats.length}</span></div>
       <div className="new-chat-wrap"><button type="button" className="button new-chat-button" onClick={() => { messenger.clearError(); setNewChatOpen(true); }}><Icon name="plus" />Новый чат</button></div>
+      {messenger.notice && <p className="settings-note" role="status">{messenger.notice} <a href="https://github.com/rdavydov/green-max#настройка-green-api" target="_blank" rel="noreferrer">Настройка</a></p>}
+      {messenger.error && !newChatOpen && !selectedChat && <div className="error-banner" role="alert"><span>{messenger.error}</span><button type="button" className="icon-button" aria-label="Скрыть ошибку" onClick={messenger.clearError}><Icon name="close" /></button></div>}
       <nav className="chat-list" aria-label="Список чатов">
         {orderedChats.length ? orderedChats.map((chat) => {
           const last = chat.messages.at(-1);
-          return <button key={chat.id} type="button" data-chat-id={chat.id} className={`chat-list-item${chat.id === selectedId ? ' selected' : ''}`} onClick={() => setSelectedId(chat.id)} aria-current={chat.id === selectedId ? 'true' : undefined}>
+          return <button key={chat.id} type="button" data-chat-id={chat.id} className={`chat-list-item${chat.id === selectedId ? ' selected' : ''}`} onClick={() => selectChat(chat.id)} aria-current={chat.id === selectedId ? 'true' : undefined}>
             <Avatar chat={chat} />
             <span className="chat-list-content"><span className="chat-list-top"><span className="chat-name">{chat.name}</span>{last && <time dateTime={new Date(last.timestamp).toISOString()}>{timeFormatter.format(last.timestamp)}</time>}</span><span className="chat-preview">{last ? `${last.direction === 'outgoing' ? 'Вы: ' : ''}${last.text}` : 'Пока нет сообщений'}</span></span>
           </button>;
@@ -258,8 +265,8 @@ function ChatWorkspace({ messenger }: { messenger: Messenger }) {
     </aside>
     <div className="chat-main">
       {messenger.connection.status !== 'online' && <div className={`connection-banner ${messenger.connection.status}`} role={messenger.connection.status === 'storage-error' ? 'alert' : 'status'}><span>{messenger.connection.message || (messenger.connection.status === 'reconnecting' ? 'Соединение прервано. Пробуем подключиться снова…' : 'Не удалось сохранить историю. Освободите место в браузере, затем повторите попытку.')}</span><button type="button" onClick={messenger.retry}>Повторить</button></div>}
-      {messenger.error && !newChatOpen && <div className="error-banner" role="alert"><span>{messenger.error}</span><button type="button" className="icon-button" aria-label="Скрыть ошибку" onClick={messenger.clearError}><Icon name="close" /></button></div>}
-      {selectedChat ? <Conversation chat={selectedChat} draft={drafts[selectedChat.id] || ''} pending={messenger.busyChatIds.includes(selectedChat.id)} onDraft={(value) => setDrafts((current) => ({ ...current, [selectedChat.id]: value }))} onSend={() => { void sendMessage(); }} onBack={() => setSelectedId(null)} /> : <section className="welcome-panel" aria-labelledby="welcome-heading"><div className="welcome-symbol"><Icon name="chat" /></div><h2 id="welcome-heading">Всегда на связи</h2><p>Выберите чат слева или начните<br />новый разговор в MAX.</p><button className="button button-primary" type="button" onClick={() => { messenger.clearError(); setNewChatOpen(true); }}><Icon name="plus" />Начать разговор</button><span className="welcome-footnote">Личные чаты · Только текстовые сообщения</span></section>}
+      {messenger.error && !newChatOpen && selectedChat && <div className="error-banner" role="alert"><span>{messenger.error}</span><button type="button" className="icon-button" aria-label="Скрыть ошибку" onClick={messenger.clearError}><Icon name="close" /></button></div>}
+      {selectedChat ? <Conversation chat={selectedChat} draft={drafts[selectedChat.id] || ''} pending={messenger.busyChatIds.includes(selectedChat.id)} loading={messenger.loadingChatIds?.includes(selectedChat.id) ?? false} onDraft={(value) => setDrafts((current) => ({ ...current, [selectedChat.id]: value }))} onSend={() => { void sendMessage(); }} onBack={() => setSelectedId(null)} /> : <section className="welcome-panel" aria-labelledby="welcome-heading"><div className="welcome-symbol"><Icon name="chat" /></div><h2 id="welcome-heading">Всегда на связи</h2><p>Выберите чат слева или начните<br />новый разговор в MAX.</p><button className="button button-primary" type="button" onClick={() => { messenger.clearError(); setNewChatOpen(true); }}><Icon name="plus" />Начать разговор</button><span className="welcome-footnote">Личные чаты · Только текстовые сообщения</span></section>}
     </div>
     {newChatOpen && <NewChatDialog error={messenger.error ?? (messenger.connection.status === 'storage-error' ? messenger.connection.message ?? 'Не удалось сохранить историю в браузере. Закройте окно, освободите место и нажмите «Повторить».' : null)} onCreate={createChat} onClearError={messenger.clearError} onClose={() => { setNewChatOpen(false); messenger.clearError(); }} />}
   </main>;

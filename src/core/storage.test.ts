@@ -44,6 +44,14 @@ describe('browser history', () => {
     expect(loadHistory('1')).toEqual(withStatus);
   });
 
+  it('restores a confirmed sent status and early sent notification after reload', () => {
+    const sent: History = { version: 1, chats: [{ ...history.chats[0], messages: [
+      { ...history.chats[0].messages[0], status: 'sent' },
+    ] }], pendingStatuses: [{ chatId: '10', id: 'new-message', status: 'sent' }] };
+    saveHistory('1', sent);
+    expect(loadHistory('1')).toEqual(sent);
+  });
+
   it('marks a sending message uncertain after a reload', () => {
     const sending: History = { version: 1, chats: [{ ...history.chats[0], messages: [
       { ...history.chats[0].messages[0], id: 'local:1', status: 'sending' },

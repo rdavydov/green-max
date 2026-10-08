@@ -16,7 +16,7 @@ export function normalizeNotification(value: unknown): NormalizedEvent {
   if (body.typeWebhook === 'outgoingMessageStatus') {
     if (typeof body.chatId !== 'string' || !/^\d+$/.test(body.chatId)
       || typeof body.idMessage !== 'string' || !body.idMessage) return { kind: 'ignore' };
-    const status: PendingStatus['status'] | null = body.status === 'delivered' || body.status === 'read'
+    const status: PendingStatus['status'] | null = body.status === 'sent' || body.status === 'delivered' || body.status === 'read'
       ? body.status : ['failed', 'noAccount', 'notInGroup'].includes(String(body.status)) ? 'failed' : null;
     if (!status) return { kind: 'ignore' };
     const error = body.status === 'noAccount' ? 'Получатель не найден в MAX.'
@@ -45,11 +45,11 @@ export function normalizeNotification(value: unknown): NormalizedEvent {
     kind: 'message', apiEcho,
     ...(name ? { name } : {}), ...(phone && /^[1-9]\d*$/.test(phone) ? { phone } : {}),
     message: { id: body.idMessage, chatId: sender.chatId, direction: incoming ? 'incoming' : 'outgoing',
-      text, timestamp: body.timestamp * 1000, status: incoming ? 'delivered' : 'queued' },
+      text, timestamp: body.timestamp * 1000, status: incoming ? 'delivered' : 'sent' },
   };
 }
 
-const rank: Record<MessageStatus, number> = { sending: 0, queued: 1, uncertain: 1, failed: 2, delivered: 3, read: 4 };
+const rank: Record<MessageStatus, number> = { sending: 0, queued: 1, uncertain: 1, sent: 2, failed: 3, delivered: 4, read: 5 };
 
 export function mergeStatus(previous: MessageStatus, next: MessageStatus): MessageStatus {
   return rank[next] >= rank[previous] ? next : previous;

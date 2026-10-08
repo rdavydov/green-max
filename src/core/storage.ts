@@ -14,7 +14,7 @@ export function historyKey(idInstance: string): string {
   return `green-max:history:v1:${idInstance}`;
 }
 
-const statuses = new Set<MessageStatus>(['sending', 'queued', 'delivered', 'read', 'failed', 'uncertain']);
+const statuses = new Set<MessageStatus>(['sending', 'queued', 'sent', 'delivered', 'read', 'failed', 'uncertain']);
 
 function parseMessage(value: unknown, chatId: string): Message | null {
   const data = record(value);
@@ -62,7 +62,7 @@ export function parseHistory(value: unknown): History | null {
       const status = record(item);
       if (!status || typeof status.chatId !== 'string' || !/^\d+$/.test(status.chatId)
         || typeof status.id !== 'string' || !status.id
-        || status.status !== 'delivered' && status.status !== 'read' && status.status !== 'failed'
+        || status.status !== 'sent' && status.status !== 'delivered' && status.status !== 'read' && status.status !== 'failed'
         || status.error !== undefined && typeof status.error !== 'string') return null;
       const key = `${status.chatId}:${status.id}`;
       if (statusIds.has(key)) return null;

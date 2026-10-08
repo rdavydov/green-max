@@ -37,6 +37,9 @@ beforeEach(() => {
   api = {
     getState: vi.fn().mockResolvedValue('authorized'),
     getSettings: vi.fn().mockResolvedValue({ typeInstance: 'v3', webhookUrl: '', incomingWebhook: 'yes' }),
+    getAccountSettings: vi.fn().mockResolvedValue({ chatId: '999', phone: '79990000000' }),
+    getChats: vi.fn().mockResolvedValue([]),
+    getChatHistory: vi.fn().mockResolvedValue([]),
     checkAccount: vi.fn().mockResolvedValue('10'),
     sendMessage: vi.fn().mockResolvedValue('server'),
     acknowledge: vi.fn().mockResolvedValue(true),
@@ -69,6 +72,84 @@ function incoming(id = 'incoming'): Notification {
 }
 
 describe('messenger session lifecycle', () => {
+  it('loads existing personal chats and labels the own account as Favorites', async () => {
+    vi.mocked(api.getChats).mockResolvedValue([
+      { id: '10', name: 'Имя MAX', phone: '79991234567', messages: [] },
+      { id: '999', name: 'R', messages: [] },
+    ]);
+    const { result } = await connected();
+    expect(result.current.chats.map(chat => [chat.id, chat.name])).toEqual([['10', 'Имя MAX'], ['999', 'Избранное']]);
+    expect(api.getChats).toHaveBeenCalledOnce();
+    expect(api.getChatHistory).not.toHaveBeenCalled();
+    expect(result.current.chats[1].phone).toBe('79990000000');
+  });
+
+  it('imports history on opening, repairs a queued send, and deduplicates a later incoming event', async () => {
+    const { result } = await connected();
+    await act(async () => { await result.current.sendMessage('10', 'hello'); });
+    vi.mocked(api.getChatHistory).mockResolvedValue([
+      { id: 'server', chatId: '10', direction: 'outgoing', text: 'hello', timestamp: Date.now(), status: 'sent' },
+      { id: 'incoming', chatId: '10', direction: 'incoming', text: 'reply', timestamp: 1_700_000_000_000, status: 'delivered' },
+    ]);
+    await act(async () => { await result.current.loadChat('10'); });
+    expect(result.current.chats[0].messages).toHaveLength(2);
+    expect(result.current.chats[0].messages.find(message => message.id === 'server')?.status).toBe('sent');
+    await act(async () => receives.shift()!.resolve(incoming()));
+    expect(result.current.chats[0].messages).toHaveLength(2);
+    expect(loadStoredMessages()).toHaveLength(2);
+  });
+
+  it('shares an in-flight history load and ignores its completion after logout', async () => {
+    const history = deferred<Awaited<ReturnType<GreenApi['getChatHistory']>>>();
+    vi.mocked(api.getChatHistory).mockReturnValue(history.promise);
+    const { result } = await connected();
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => { first = result.current.loadChat('10'); second = result.current.loadChat('10'); });
+    expect(api.getChatHistory).toHaveBeenCalledOnce();
+    expect(result.current.loadingChatIds).toEqual(['10']);
+    act(() => result.current.logout());
+    await act(async () => {
+      history.resolve([{ id: 'late', chatId: '10', direction: 'incoming', text: 'ignored', timestamp: Date.now(), status: 'delivered' }]);
+      await Promise.all([first, second]);
+    });
+    expect(result.current.chats).toEqual([]);
+    expect(loadStoredMessages()).toEqual([]);
+  });
+
+  it('allows login with local history if chat list fetch fails, but rejects an auth error', async () => {
+    vi.mocked(api.getChats).mockRejectedValue(new ApiError('Temporary', 500));
+    const { result } = await connected();
+    expect(result.current.phase).toBe('connected');
+    expect(result.current.chats[0].id).toBe('10');
+    expect(result.current.error).toContain('список чатов');
+    act(() => result.current.logout());
+    vi.mocked(api.getChats).mockRejectedValue(new ApiError('Invalid credentials', 401));
+    await act(async () => { expect(await result.current.login(credentials)).toBe(false); });
+    expect(result.current.phase).toBe('signed-out');
+  });
+
+  it('shows a settings hint when delivery notifications are disabled without blocking login', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue({ typeInstance: 'v3', webhookUrl: '', incomingWebhook: 'yes',
+      outgoingWebhook: 'no', outgoingMessageWebhook: 'yes', outgoingAPIMessageWebhook: 'yes' });
+    const { result } = await connected();
+    expect(result.current.notice).toContain('о статусах отправленных сообщений');
+    expect(result.current.error).toBeNull();
+    expect(result.current.phase).toBe('connected');
+  });
+
+  it('keeps Favorites name when an outgoing echo uses the profile name', async () => {
+    vi.mocked(api.getAccountSettings).mockResolvedValue({ chatId: '10', phone: '79991234567' });
+    const { result } = await connected();
+    await act(async () => receives.shift()!.resolve({ receiptId: 100, body: {
+      typeWebhook: 'outgoingAPIMessageReceived', idMessage: 'self', timestamp: Date.now() / 1000,
+      senderData: { chatId: '10', chatType: 'user', chatName: 'R' },
+      messageData: { typeMessage: 'textMessage', textMessageData: { textMessage: 'self test' } },
+    } }));
+    expect(result.current.chats[0].name).toBe('Избранное');
+    expect(result.current.chats[0].messages[0].status).toBe('sent');
+  });
+
   it('starts exactly one polling loop under StrictMode and stores no token', async () => {
     const { result } = await connected();
     expect(result.current.phase).toBe('connected');
@@ -271,7 +352,7 @@ describe('messenger session lifecycle', () => {
     await waitFor(() => expect(api.acknowledge).toHaveBeenCalledTimes(1));
     expect(result.current.chats[0].messages).toHaveLength(1);
     await act(async () => { post.resolve('server'); expect(await send).toBe(true); });
-    expect(result.current.chats[0].messages).toEqual([expect.objectContaining({ id: 'server', status: 'queued' })]);
+    expect(result.current.chats[0].messages).toEqual([expect.objectContaining({ id: 'server', status: 'sent' })]);
   });
 
   it('applies a read status arriving before POST response and prevents a later delivered regression', async () => {

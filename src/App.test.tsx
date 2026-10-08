@@ -21,6 +21,7 @@ beforeEach(() => {
     login: vi.fn().mockResolvedValue(true),
     logout: vi.fn(),
     createChat: vi.fn().mockResolvedValue('chat-1'),
+    loadChat: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(true),
     retry: vi.fn(),
     clearError: vi.fn(),
@@ -179,6 +180,24 @@ describe('message composer', () => {
 });
 
 describe('history and connection state', () => {
+  it('loads the selected chat and distinguishes sent from queued', () => {
+    messenger.chats[0].messages = [
+      { id: 'm-1', chatId: 'chat-1', direction: 'outgoing', text: 'Подтверждено MAX', timestamp: 1720000000000, status: 'sent' },
+      { id: 'm-2', chatId: 'chat-1', direction: 'outgoing', text: 'Принято GREEN-API', timestamp: 1720000060000, status: 'queued' },
+    ];
+    openConversation();
+    expect(messenger.loadChat).toHaveBeenCalledWith('chat-1');
+    expect(screen.getByLabelText('Отправлено')).toBeInTheDocument();
+    expect(screen.getByLabelText('В очереди')).toBeInTheDocument();
+  });
+
+  it('shows a chat-list fetch error in the sidebar before a conversation is selected', () => {
+    messenger.phase = 'connected';
+    messenger.error = 'Не удалось загрузить список чатов MAX';
+    render(<App />);
+    expect(within(screen.getByRole('complementary', { name: 'Чаты' })).getByRole('alert')).toHaveTextContent(messenger.error);
+  });
+
   it('discards local drafts and selection on authentication loss before another login', () => {
     const { rerender } = openConversation();
     fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение' }), { target: { value: 'Старый аккаунт' } });

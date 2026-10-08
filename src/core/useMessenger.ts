@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, createGreenApi, normalizePhone, type GreenApi } from './api';
-import { applyStatus, confirmSend, normalizeNotification, updateMessage, upsertMessage, type NormalizedEvent } from './notifications';
+import { applyStatus, confirmSend, mergeStatus, normalizeNotification, updateMessage, upsertMessage, type NormalizedEvent } from './notifications';
 import { loadHistory, saveHistory } from './storage';
+import { mergeRemoteChats, mergeRemoteHistory } from './historySync';
 import type { Credentials, History, Messenger } from './types';
 
 type StatusEvent = Extract<NormalizedEvent, { kind: 'status' }>;
@@ -21,6 +22,8 @@ interface Session {
   aliases: Map<string, string>;
   earlyStatuses: Map<string, StatusEvent>;
   wakeRetry?: () => void;
+  account?: { chatId: string; phone: string };
+  loading: Map<string, Promise<void>>;
 }
 
 function errorText(error: unknown): string {
@@ -63,6 +66,8 @@ export function useMessenger(): Messenger {
   const [busyChatIds, setBusyChatIds] = useState<string[]>([]);
   const [connection, setConnection] = useState<Messenger['connection']>({ status: 'online' });
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loadingChatIds, setLoadingChatIds] = useState<string[]>([]);
   const mounted = useRef(true);
   const generation = useRef(0);
   const sessionRef = useRef<Session | null>(null);
@@ -91,6 +96,8 @@ export function useMessenger(): Messenger {
     setPhase('signed-out');
     setChats([]);
     setBusyChatIds([]);
+    setLoadingChatIds([]);
+    setNotice(null);
     setConnection({ status: 'online' });
     setError(message ?? null);
   }, [dispose, isCurrent]);
@@ -99,6 +106,7 @@ export function useMessenger(): Messenger {
     if (isCurrent(session)) {
       setChats(session.history.chats);
       setBusyChatIds([...session.busy]);
+      setLoadingChatIds([...session.loading.keys()]);
     }
   }, [isCurrent]);
 
@@ -154,7 +162,7 @@ export function useMessenger(): Messenger {
               const key = `${event.chatId}:${event.id}`;
               if (!exists && (session.busy.has(event.chatId) || session.earlyStatuses.has(key))) {
                 const previous = session.earlyStatuses.get(key);
-                if (!previous || previous.status !== 'read' && (previous.status !== 'delivered' || event.status === 'read')) {
+                if (!previous || mergeStatus(previous.status, event.status) === event.status) {
                   session.earlyStatuses.set(key, event);
                 }
                 session.history = { ...session.history, pendingStatuses: [...session.earlyStatuses.values()].map(status => ({
@@ -165,6 +173,7 @@ export function useMessenger(): Messenger {
                 if (exists) applyEarlyStatus(session, event.chatId, event.id);
               }
             } else if (event.kind === 'state') session.pendingReceipt.state = event.state;
+            session.history = mergeRemoteChats(session.history, [], session.account);
             publish(session);
           }
           // This synchronous write must succeed before consuming the server's receipt.
@@ -215,12 +224,14 @@ export function useMessenger(): Messenger {
     const session: Session = {
       generation: generation.current, credentials, api: createGreenApi(credentials), controller: new AbortController(),
       history: { version: 1, chats: [] }, ready: false, polling: false, paused: false,
-      busy: new Set(), aliases: new Map(), earlyStatuses: new Map(),
+      busy: new Set(), aliases: new Map(), earlyStatuses: new Map(), loading: new Map(),
     };
     sessionRef.current = session;
     setPhase('connecting');
     setChats([]);
     setBusyChatIds([]);
+    setLoadingChatIds([]);
+    setNotice(null);
     setError(null);
     setConnection({ status: 'online' });
     try {
@@ -234,7 +245,7 @@ export function useMessenger(): Messenger {
       if (settings.typeInstance !== 'v3') throw new Error('Нужен инстанс GREEN-API для MAX. Инстанс другого мессенджера не подойдет.');
       if (state !== 'authorized') throw new Error(`Инстанс MAX не авторизован (${state}). Подключите его в кабинете GREEN-API.`);
       if (settings.webhookUrl !== '' || settings.incomingWebhook !== 'yes') {
-        throw new Error('В настройках инстанса GREEN-API очистите webhookUrl и включите «Получать уведомления о входящих сообщениях и файлах».');
+        throw new Error('В настройках GREEN-API очистите «Адрес отправки уведомлений (URL)» (Webhook Url / webhookUrl) и включите «Получать уведомления о входящих сообщениях и файлах» (Receive webhooks on incoming messages and files).');
       }
       session.history = loadHistory(credentials.idInstance);
       for (const status of session.history.pendingStatuses ?? []) {
@@ -242,6 +253,23 @@ export function useMessenger(): Messenger {
       }
       // A write check also detects unavailable/quota-limited storage before polling consumes anything.
       saveHistory(credentials.idInstance, session.history);
+      const [accountResult, chatsResult] = await Promise.allSettled([
+        session.api.getAccountSettings(session.controller.signal), session.api.getChats(session.controller.signal),
+      ]);
+      if (!isCurrent(session)) return false;
+      for (const result of [accountResult, chatsResult]) {
+        if (result.status === 'rejected' && result.reason instanceof ApiError && result.reason.isAuthError) throw result.reason;
+      }
+      if (accountResult.status === 'fulfilled') session.account = accountResult.value;
+      session.history = mergeRemoteChats(session.history, chatsResult.status === 'fulfilled' ? chatsResult.value : [], session.account);
+      saveHistory(credentials.idInstance, session.history);
+      if (chatsResult.status === 'rejected') setError('Не удалось загрузить список чатов MAX. Сохранённые чаты доступны; войдите повторно, чтобы обновить список.');
+      const missingNotifications = [
+        [settings.outgoingWebhook, 'о статусах отправленных сообщений'],
+        [settings.outgoingAPIMessageWebhook, 'о сообщениях, отправленных с API'],
+        [settings.outgoingMessageWebhook, 'о сообщениях, отправленных с телефона'],
+      ].filter(([value]) => value !== undefined && value !== 'yes').map(([, label]) => label);
+      if (missingNotifications.length) setNotice(`В GREEN-API включите уведомления ${missingNotifications.join(', ')}. Это нужно для обновления статусов без повторного открытия чата.`);
       session.ready = true;
       setChats(session.history.chats);
       setPhase('connected');
@@ -258,9 +286,40 @@ export function useMessenger(): Messenger {
     setPhase('signed-out');
     setChats([]);
     setBusyChatIds([]);
+    setLoadingChatIds([]);
+    setNotice(null);
     setError(null);
     setConnection({ status: 'online' });
   }, [dispose]);
+
+  const loadChat = useCallback(async (chatId: string): Promise<void> => {
+    const session = sessionRef.current;
+    if (!session || !session.ready || !isCurrent(session) || session.paused) return;
+    if (!session.history.chats.some(chat => chat.id === chatId)) return;
+    const existing = session.loading.get(chatId);
+    if (existing) return existing;
+    const task = (async () => {
+      try {
+        const messages = await session.api.getChatHistory(chatId, session.controller.signal);
+        if (!isCurrent(session)) return;
+        session.history = mergeRemoteHistory(session.history, chatId, messages);
+        for (const message of messages) applyEarlyStatus(session, chatId, message.id);
+        session.history = mergeRemoteChats(session.history, [], session.account);
+        publish(session);
+        persist(session);
+      } catch (historyError) {
+        if (!isCurrent(session)) return;
+        if (historyError instanceof ApiError && historyError.isAuthError) endSession(session, historyError.message);
+        else setError(`Не удалось загрузить сообщения. Откройте чат ещё раз, чтобы повторить. ${errorText(historyError)}`);
+      } finally {
+        session.loading.delete(chatId);
+        publish(session);
+      }
+    })();
+    session.loading.set(chatId, task);
+    publish(session);
+    return task;
+  }, [applyEarlyStatus, endSession, isCurrent, persist, publish]);
 
   const createChat = useCallback(async (input: string): Promise<string | null> => {
     const session = sessionRef.current;
@@ -278,6 +337,7 @@ export function useMessenger(): Messenger {
       session.history = { ...session.history, chats: existingById ? session.history.chats.map(chat => chat.id === id
         ? { ...chat, phone, name: chat.name === id ? `+${phone}` : chat.name } : chat)
         : [...session.history.chats, { id, phone, name: `+${phone}`, messages: [] }] };
+      session.history = mergeRemoteChats(session.history, [], session.account);
       publish(session);
       return persist(session) ? id : null;
     } catch (chatError) {
@@ -359,5 +419,5 @@ export function useMessenger(): Messenger {
   }, [isCurrent, persist]);
 
   const clearError = useCallback(() => setError(null), []);
-  return { phase, chats, busyChatIds, connection, error, login, logout, createChat, sendMessage, retry, clearError };
+  return { phase, chats, busyChatIds, loadingChatIds, connection, error, notice, login, logout, createChat, loadChat, sendMessage, retry, clearError };
 }

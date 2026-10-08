@@ -1,6 +1,63 @@
 import { expect, test } from '@playwright/test';
 import { GreenApiFixture, createChat, credentials, incomingText, login, outgoingStatus, phones, sendText } from './fixtures';
 
+test('существующие чаты и Избранное загружаются из MAX, история не дублируется с уведомлениями', async ({ page, context }) => {
+  const api = new GreenApiFixture();
+  api.chats = [
+    { chatId: '10001', name: 'Анна', type: 'user', phoneNumber: 79991234567 },
+    { chatId: '999', name: 'Имя аккаунта', type: 'user', phoneNumber: 79990000000 },
+    { chatId: '-10003', name: 'Группа MAX', type: 'group', phoneNumber: 0 },
+  ];
+  const timestamp = Math.floor(Date.now() / 1000);
+  api.chatHistory.set('10001', [
+    { type: 'outgoing', idMessage: 'old-outgoing', timestamp, typeMessage: 'textMessage',
+      chatId: '10001', chatType: 'user', textMessage: 'Уже отправленное сообщение', statusMessage: 'sent' },
+    { type: 'incoming', idMessage: 'old-incoming', timestamp: timestamp - 1, typeMessage: 'extendedTextMessage',
+      chatId: '10001', chatType: 'user', textMessage: 'Старая ссылка https://example.org' },
+  ]);
+  api.chatHistory.set('999', [
+    { type: 'outgoing', idMessage: 'saved-note', timestamp, typeMessage: 'textMessage',
+      chatId: '999', chatType: 'user', textMessage: 'Моя заметка в Избранном', statusMessage: '' },
+  ]);
+  await api.install(context);
+  await page.goto('./');
+  await login(page);
+  await expect(page.locator('[data-chat-id="10001"]')).toContainText('Анна');
+  await expect(page.locator('[data-chat-id="999"]')).toContainText('Избранное');
+  await expect(page.getByText('Группа MAX', { exact: true })).toHaveCount(0);
+  await page.locator('[data-chat-id="10001"]').click();
+  await expect(page.locator('[data-message-id="old-outgoing"]')).toContainText('Отправлено');
+  await expect(page.locator('[data-message-id="old-incoming"]')).toContainText('Старая ссылка https://example.org');
+  await api.push(outgoingStatus(100, 'old-outgoing', 'read'));
+  await expect(page.locator('[data-message-id="old-outgoing"]')).toContainText('Прочитано');
+  await api.push(incomingText(101, 'old-incoming', 'Старая ссылка https://example.org', '10001', true));
+  await expect.poll(() => api.deleted.includes(101)).toBe(true);
+  await expect(page.locator('[data-message-id="old-incoming"]')).toHaveCount(1);
+  await page.locator('[data-chat-id="999"]').click();
+  await expect(page.locator('[data-message-id="saved-note"]')).toContainText('Моя заметка в Избранном');
+  await expect(page.locator('[data-message-id="saved-note"]')).toContainText('Отправлено');
+  await page.locator('[data-chat-id="10001"]').click();
+  await expect(page.locator('[data-message-id="old-outgoing"]')).toContainText('Прочитано');
+  const stored = await page.evaluate(() => Object.values(localStorage).join('\n'));
+  expect(stored).toContain('saved-note');
+  expect(stored).not.toContain(credentials.apiTokenInstance);
+});
+
+test('статус sent меняет очередь на отправлено до получения доставки', async ({ page, context }) => {
+  const api = new GreenApiFixture();
+  await api.install(context);
+  await page.goto('./');
+  await login(page);
+  await createChat(page);
+  await sendText(page, 'Тест статуса отправки');
+  await expect.poll(() => api.sent.length).toBe(1);
+  await expect(page.locator('[data-message-id="out-1"]')).toContainText('В очереди');
+  await api.push(outgoingStatus(102, 'out-1', 'sent'));
+  await expect(page.locator('[data-message-id="out-1"]')).toContainText('Отправлено');
+  await api.push(outgoingStatus(103, 'out-1', 'delivered'));
+  await expect(page.locator('[data-message-id="out-1"]')).toContainText('Доставлено');
+});
+
 test('обмен текстом и URL, статусы, два чата и отсутствие дублей в StrictMode', async ({ page, context }) => {
   const api = new GreenApiFixture();
   await api.install(context);

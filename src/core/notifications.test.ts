@@ -69,7 +69,28 @@ describe('MAX notifications', () => {
     expect(echoed.history.chats[0].messages).toHaveLength(1);
     const confirmed = confirmSend(echoed.history, '10', textBody.idMessage, textBody.idMessage);
     expect(confirmed.chats[0].messages).toHaveLength(1);
-    expect(confirmed.chats[0].messages[0]).toMatchObject({ id: textBody.idMessage, status: 'queued' });
+    expect(confirmed.chats[0].messages[0]).toMatchObject({ id: textBody.idMessage, status: 'sent' });
+  });
+
+  it('treats outgoing echoes as sent without assuming delivery or reading in Favorites', () => {
+    const event = normalizeNotification({ ...textBody, typeWebhook: 'outgoingAPIMessageReceived',
+      senderData: { ...textBody.senderData, chatName: 'Избранное' } });
+    expect(event).toMatchObject({ kind: 'message', name: 'Избранное', apiEcho: true,
+      message: { direction: 'outgoing', status: 'sent' } });
+    expect(normalizeNotification({ ...textBody, typeWebhook: 'outgoingMessageReceived' }))
+      .toMatchObject({ kind: 'message', apiEcho: false, message: { direction: 'outgoing', status: 'sent' } });
+  });
+
+  it('keeps a POST acceptance queued until a notification confirms it was sent', () => {
+    const local: History = { version: 1, chats: [{ id: '10', name: 'Alex', messages: [
+      { id: 'local:1', chatId: '10', direction: 'outgoing', text: 'hello', timestamp: 1, status: 'sending' },
+    ] }] };
+    const confirmed = confirmSend(local, '10', 'local:1', 'server');
+    expect(confirmed.chats[0].messages[0].status).toBe('queued');
+    const status = normalizeNotification({ typeWebhook: 'outgoingMessageStatus', chatId: '10',
+      idMessage: 'server', status: 'sent' });
+    if (status.kind !== 'status') throw new Error('expected status');
+    expect(applyStatus(confirmed, status).chats[0].messages[0].status).toBe('sent');
   });
 
   it('collapses an optimistic bubble and an already stored server message on POST completion', () => {
@@ -87,6 +108,10 @@ describe('MAX notifications', () => {
     expect(mergeStatus('delivered', 'failed')).toBe('delivered');
     expect(mergeStatus('failed', 'queued')).toBe('failed');
     expect(mergeStatus('queued', 'failed')).toBe('failed');
+    expect(mergeStatus('sent', 'queued')).toBe('sent');
+    expect(mergeStatus('sent', 'failed')).toBe('failed');
+    expect(mergeStatus('failed', 'sent')).toBe('failed');
+    expect(mergeStatus('read', 'sent')).toBe('read');
     const history: History = { version: 1, chats: [{ id: '10', name: 'Alex', messages: [
       { id: 'server', chatId: '10', direction: 'outgoing', text: 'hello', timestamp: 1, status: 'read' },
     ] }] };
