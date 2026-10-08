@@ -21,6 +21,8 @@ test('обмен текстом и URL, статусы, два чата и от�
   await expect.poll(() => api.deleted.includes(4)).toBe(true);
   const visibleMessages = page.locator('[data-message-id="in-1"]');
   await expect(visibleMessages).toHaveCount(1);
+  // Recipient lookup is asynchronous; the previous chat remains visible until it completes.
+  api.checkAccountDelayMs = 200;
   await createChat(page, phones.second);
   await sendText(page, 'Сообщение для Михаила');
   await expect.poll(() => api.sent.length).toBe(2);

@@ -58,6 +58,7 @@ export class GreenApiFixture {
   readonly sent: { chatId: string; message: string; idMessage: string }[] = [];
   readonly deleted: number[] = [];
   readonly requests: { action: string; method: string }[] = [];
+  checkAccountDelayMs = 0;
   failNextSend = false;
   holdDeletes = false;
   maxPendingReceives = 0;
@@ -92,6 +93,9 @@ export class GreenApiFixture {
           break;
         case 'checkaccount': {
           const { phoneNumber } = request.postDataJSON() as { phoneNumber: number | string };
+          if (this.checkAccountDelayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, this.checkAccountDelayMs));
+          }
           await this.json(route, { exist: true, chatId: String(phoneNumber).endsWith('54321') ? '10002' : '10001' });
           break;
         }
@@ -182,6 +186,7 @@ export async function createChat(page: Page, phone = phones.first) {
   await page.getByRole('button', { name: 'Новый чат', exact: true }).click();
   await page.getByLabel('Номер телефона', { exact: true }).fill(phone);
   await page.getByRole('button', { name: 'Создать чат', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Новый чат', exact: true })).toBeHidden();
   await expect(page.getByRole('textbox', { name: 'Сообщение', exact: true })).toBeVisible();
 }
 
