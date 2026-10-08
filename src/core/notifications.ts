@@ -1,8 +1,8 @@
 import { record } from './api';
-import type { Chat, History, Message, MessageStatus, PendingStatus } from './types';
+import { isChatId, isChatType, type Chat, type ChatType, type History, type Message, type MessageStatus, type PendingStatus } from './types';
 
 export type NormalizedEvent =
-  | { kind: 'message'; message: Message; name?: string; phone?: string; apiEcho: boolean }
+  | { kind: 'message'; message: Message; name?: string; phone?: string; chatType?: ChatType; apiEcho: boolean }
   | ({ kind: 'status' } & PendingStatus)
   | { kind: 'state'; state: string }
   | { kind: 'ignore' };
@@ -14,7 +14,7 @@ export function normalizeNotification(value: unknown): NormalizedEvent {
     return { kind: 'state', state: body.stateInstance };
   }
   if (body.typeWebhook === 'outgoingMessageStatus') {
-    if (typeof body.chatId !== 'string' || !/^\d+$/.test(body.chatId)
+    if (!isChatId(body.chatId)
       || typeof body.idMessage !== 'string' || !body.idMessage) return { kind: 'ignore' };
     const status: PendingStatus['status'] | null = body.status === 'sent' || body.status === 'delivered' || body.status === 'read'
       ? body.status : ['failed', 'noAccount', 'notInGroup'].includes(String(body.status)) ? 'failed' : null;
@@ -29,23 +29,28 @@ export function normalizeNotification(value: unknown): NormalizedEvent {
   if (!incoming && !outgoing) return { kind: 'ignore' };
   const sender = record(body.senderData);
   const data = record(body.messageData);
-  if (!sender || !data || typeof sender.chatId !== 'string' || !/^\d+$/.test(sender.chatId)
-    || sender.chatType !== undefined && sender.chatType !== 'user'
+  if (!sender || !data || !isChatId(sender.chatId)
+    || sender.chatType !== undefined && !isChatType(sender.chatType)
     || typeof body.idMessage !== 'string' || !body.idMessage
     || typeof body.timestamp !== 'number' || !Number.isFinite(body.timestamp)
     || body.timestamp < 0 || body.timestamp > 8.64e12) return { kind: 'ignore' };
   const text = data.typeMessage === 'textMessage' ? record(data.textMessageData)?.textMessage
     : data.typeMessage === 'extendedTextMessage' ? record(data.extendedTextMessageData)?.text : null;
   if (typeof text !== 'string') return { kind: 'ignore' };
+  const chatType = isChatType(sender.chatType) ? sender.chatType : undefined;
+  const personal = (chatType ?? (sender.chatId.startsWith('-') ? 'group' : 'user')) === 'user';
   const name = typeof sender.chatName === 'string' && sender.chatName ? sender.chatName
-    : typeof sender.senderName === 'string' && sender.senderName ? sender.senderName : undefined;
+    : personal && typeof sender.senderName === 'string' && sender.senderName ? sender.senderName : undefined;
   const phone = typeof sender.senderPhoneNumber === 'string' || typeof sender.senderPhoneNumber === 'number'
     ? String(sender.senderPhoneNumber) : undefined;
   return {
     kind: 'message', apiEcho,
-    ...(name ? { name } : {}), ...(phone && /^[1-9]\d*$/.test(phone) ? { phone } : {}),
+    ...(name ? { name } : {}), ...(chatType ? { chatType } : {}),
+    ...(personal && phone && /^[1-9]\d*$/.test(phone) ? { phone } : {}),
     message: { id: body.idMessage, chatId: sender.chatId, direction: incoming ? 'incoming' : 'outgoing',
-      text, timestamp: body.timestamp * 1000, status: incoming ? 'delivered' : 'sent' },
+      text, timestamp: body.timestamp * 1000, status: incoming ? 'delivered' : 'sent',
+      ...(incoming && typeof sender.senderName === 'string' && sender.senderName
+        ? { senderName: sender.senderName } : {}) },
   };
 }
 
@@ -62,6 +67,7 @@ export function upsertMessage(history: History, event: Extract<NormalizedEvent, 
   const message = event.message;
   const previousChat = history.chats.find(chat => chat.id === message.chatId);
   const chat: Chat = previousChat ?? { id: message.chatId, name: event.name ?? event.phone ?? message.chatId,
+    type: event.chatType ?? (message.chatId.startsWith('-') ? 'group' : 'user'),
     ...(event.phone ? { phone: event.phone } : {}), messages: [] };
   let existing = chat.messages.find(item => item.id === message.id);
   let alias: { localId: string; serverId: string } | undefined;
@@ -79,7 +85,9 @@ export function upsertMessage(history: History, event: Extract<NormalizedEvent, 
   if (merged.status !== 'failed' && merged.status !== 'uncertain') delete merged.error;
   const messages = (existing ? chat.messages.map(item => item.id === existing.id ? merged : item) : [...chat.messages, merged])
     .sort((first, second) => first.timestamp - second.timestamp);
-  const updated: Chat = { ...chat, name: event.name ?? chat.name, ...(event.phone ? { phone: event.phone } : {}), messages };
+  const updated: Chat = { ...chat, name: event.name ?? chat.name,
+    ...(event.chatType ? { type: event.chatType } : {}),
+    ...((event.chatType ?? chat.type ?? 'user') === 'user' && event.phone ? { phone: event.phone } : {}), messages };
   return {
     history: { ...history, chats: previousChat ? history.chats.map(item => item.id === chat.id ? updated : item) : [...history.chats, updated] },
     ...(alias ? { alias } : {}),

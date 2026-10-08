@@ -1,4 +1,4 @@
-import type { Chat, History, Message, MessageStatus, PendingStatus } from './types';
+import { isChatId, isChatType, type Chat, type History, type Message, type MessageStatus, type PendingStatus } from './types';
 import { record } from './api';
 
 type HistoryStorage = Pick<Storage, 'getItem' | 'setItem'>;
@@ -22,11 +22,13 @@ function parseMessage(value: unknown, chatId: string): Message | null {
     || data.direction !== 'incoming' && data.direction !== 'outgoing'
     || typeof data.text !== 'string' || typeof data.timestamp !== 'number' || !Number.isFinite(data.timestamp)
     || data.timestamp < 0 || data.timestamp > 8.64e15 || typeof data.status !== 'string' || !statuses.has(data.status as MessageStatus)
-    || data.error !== undefined && typeof data.error !== 'string') return null;
+    || data.error !== undefined && typeof data.error !== 'string'
+    || data.senderName !== undefined && typeof data.senderName !== 'string') return null;
   const interrupted = data.status === 'sending';
   return {
     id: data.id, chatId, direction: data.direction, text: data.text, timestamp: data.timestamp,
     status: interrupted ? 'uncertain' : data.status as MessageStatus,
+    ...(typeof data.senderName === 'string' ? { senderName: data.senderName } : {}),
     ...(interrupted ? { error: 'Отправка прервалась. Проверьте доставку в MAX перед повторной отправкой.' }
       : typeof data.error === 'string' ? { error: data.error } : {}),
   };
@@ -39,8 +41,9 @@ export function parseHistory(value: unknown): History | null {
   const ids = new Set<string>();
   for (const item of data.chats) {
     const chat = record(item);
-    if (!chat || typeof chat.id !== 'string' || !/^\d+$/.test(chat.id) || ids.has(chat.id)
+    if (!chat || !isChatId(chat.id) || ids.has(chat.id)
       || typeof chat.name !== 'string' || chat.phone !== undefined && typeof chat.phone !== 'string'
+      || chat.type !== undefined && !isChatType(chat.type)
       || !Array.isArray(chat.messages)) return null;
     ids.add(chat.id);
     const messages: Message[] = [];
@@ -51,7 +54,8 @@ export function parseHistory(value: unknown): History | null {
       messageIds.add(message.id);
       messages.push(message);
     }
-    chats.push({ id: chat.id, name: chat.name, ...(typeof chat.phone === 'string' ? { phone: chat.phone } : {}),
+    chats.push({ id: chat.id, name: chat.name, ...(isChatType(chat.type) ? { type: chat.type } : {}),
+      ...(typeof chat.phone === 'string' ? { phone: chat.phone } : {}),
       messages: messages.sort((first, second) => first.timestamp - second.timestamp) });
   }
   const pendingStatuses: PendingStatus[] = [];
@@ -60,7 +64,7 @@ export function parseHistory(value: unknown): History | null {
     if (!Array.isArray(data.pendingStatuses)) return null;
     for (const item of data.pendingStatuses) {
       const status = record(item);
-      if (!status || typeof status.chatId !== 'string' || !/^\d+$/.test(status.chatId)
+      if (!status || !isChatId(status.chatId)
         || typeof status.id !== 'string' || !status.id
         || status.status !== 'sent' && status.status !== 'delivered' && status.status !== 'read' && status.status !== 'failed'
         || status.error !== undefined && typeof status.error !== 'string') return null;
@@ -92,9 +96,11 @@ export function saveHistory(idInstance: string, history: History, storage?: Hist
   // Persist only the public history model; credentials and webhook envelopes never enter storage.
   const clean: History = { version: 1, chats: history.chats.map(chat => ({
     id: chat.id, name: chat.name, ...(chat.phone ? { phone: chat.phone } : {}),
+    ...(chat.type ? { type: chat.type } : {}),
     messages: chat.messages.map(message => ({
       id: message.id, chatId: message.chatId, direction: message.direction, text: message.text,
       timestamp: message.timestamp, status: message.status, ...(message.error ? { error: message.error } : {}),
+      ...(message.senderName ? { senderName: message.senderName } : {}),
     })),
   })), ...(history.pendingStatuses?.length ? { pendingStatuses: history.pendingStatuses.map(status => ({
     chatId: status.chatId, id: status.id, status: status.status, ...(status.error ? { error: status.error } : {}),

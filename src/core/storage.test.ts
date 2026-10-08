@@ -52,6 +52,17 @@ describe('browser history', () => {
     expect(loadHistory('1')).toEqual(sent);
   });
 
+  it('restores negative group IDs, chat types and message authors while keeping old v1 history readable', () => {
+    const group: History = { version: 1, chats: [{ id: '-10000000000000001', type: 'group', name: 'Группа', messages: [{
+      id: 'group-message', chatId: '-10000000000000001', direction: 'incoming', text: 'Привет', timestamp: 1,
+      status: 'delivered', senderName: 'Анна',
+    }] }], pendingStatuses: [{ chatId: '-10000000000000001', id: 'group-outgoing', status: 'sent' }] };
+    saveHistory('1', group);
+    expect(loadHistory('1')).toEqual(group);
+    expect(parseHistory(history)).toEqual(history);
+    expect(parseHistory({ version: 1, chats: [{ ...group.chats[0], type: 'unknown' }] })).toBeNull();
+  });
+
   it('marks a sending message uncertain after a reload', () => {
     const sending: History = { version: 1, chats: [{ ...history.chats[0], messages: [
       { ...history.chats[0].messages[0], id: 'local:1', status: 'sending' },

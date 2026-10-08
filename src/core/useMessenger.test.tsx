@@ -72,6 +72,14 @@ function incoming(id = 'incoming'): Notification {
 }
 
 describe('messenger session lifecycle', () => {
+  it('does not send messages to a read-only channel', async () => {
+    vi.mocked(api.getChats).mockResolvedValue([{ id: '-123', name: 'Новости', type: 'channel', messages: [] }]);
+    const { result } = await connected();
+    await act(async () => { expect(await result.current.sendMessage('-123', 'text')).toBe(false); });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(result.current.error).toContain('только для чтения');
+  });
+
   it('loads existing personal chats and labels the own account as Favorites', async () => {
     vi.mocked(api.getChats).mockResolvedValue([
       { id: '10', name: 'Имя MAX', phone: '79991234567', messages: [] },

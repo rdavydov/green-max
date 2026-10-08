@@ -180,6 +180,38 @@ describe('message composer', () => {
 });
 
 describe('history and connection state', () => {
+  it('closes a settings notice for the current session while switching conversations', () => {
+    messenger.notice = 'Включите уведомления о статусах';
+    messenger.phase = 'connected';
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Скрыть уведомление' }));
+    expect(container.querySelector('[data-notice="settings"]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Анна/ }));
+    expect(container.querySelector('[data-notice="settings"]')).toBeNull();
+  });
+
+  it('collapses a storage warning without losing recovery controls, and expands it again', () => {
+    messenger.connection = { status: 'storage-error', message: 'Нужен доступ к хранилищу' };
+    const { container } = openConversation();
+    fireEvent.click(screen.getByRole('button', { name: 'Свернуть уведомление' }));
+    expect(container.querySelector('[data-notice="connection"]')).toBeNull();
+    expect(container.querySelector('[data-notice="connection-summary"]')).toHaveTextContent('Получение приостановлено');
+    fireEvent.click(screen.getByRole('button', { name: 'Развернуть уведомление' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Нужен доступ к хранилищу');
+  });
+
+  it('shows group authors and keeps channels read-only', () => {
+    messenger.chats[0].type = 'group';
+    messenger.chats[0].messages = [{ id: 'group-text', chatId: 'chat-1', direction: 'incoming', text: 'Ответ группы',
+      timestamp: 1720000000000, status: 'delivered', senderName: 'Елена' }];
+    messenger.chats[1].type = 'channel';
+    const { container } = openConversation();
+    expect(container.querySelector('.message-author')).toHaveTextContent('Елена');
+    fireEvent.click(screen.getByRole('button', { name: /Борис/ }));
+    expect(screen.getByText('Канал доступен только для чтения')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Сообщение' })).not.toBeInTheDocument();
+  });
+
   it('loads the selected chat and distinguishes sent from queued', () => {
     messenger.chats[0].messages = [
       { id: 'm-1', chatId: 'chat-1', direction: 'outgoing', text: 'Подтверждено MAX', timestamp: 1720000000000, status: 'sent' },

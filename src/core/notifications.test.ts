@@ -29,11 +29,45 @@ describe('MAX notifications', () => {
     expect(upsertMessage(stored, event).history.chats[0].phone).toBe('79991234567');
   });
 
-  it('ignores groups, attachments and malformed events', () => {
-    expect(normalizeNotification({ ...textBody, senderData: { chatId: '-10', chatType: 'group' } })).toEqual({ kind: 'ignore' });
+  it('ignores attachments, unknown chat types and malformed events', () => {
+    expect(normalizeNotification({ ...textBody, senderData: { chatId: '-10', chatType: 'unknown' } })).toEqual({ kind: 'ignore' });
     expect(normalizeNotification({ ...textBody, messageData: { typeMessage: 'imageMessage' } })).toEqual({ kind: 'ignore' });
     expect(normalizeNotification(null)).toEqual({ kind: 'ignore' });
     expect(normalizeNotification({ ...textBody, timestamp: 1e20 })).toEqual({ kind: 'ignore' });
+  });
+
+  it.each(['group', 'channel', 'bot'])('normalizes text from a %s and creates the matching chat type', chatType => {
+    const chatId = chatType === 'bot' ? '10003' : '-10000000000000001';
+    const event = normalizeNotification({ ...textBody, senderData: {
+      chatId, chatType, chatName: 'Название чата', senderName: 'Анна', senderPhoneNumber: 79991234567,
+    } });
+    if (event.kind !== 'message') throw new Error('expected message');
+    expect(event).toMatchObject({ chatType, name: 'Название чата', message: { chatId, senderName: 'Анна' } });
+    expect(event.phone).toBeUndefined();
+    expect(upsertMessage(empty, event).history.chats[0]).toMatchObject({ id: chatId, type: chatType, name: 'Название чата' });
+  });
+
+  it('does not replace a group name with the author name if chatName is missing', () => {
+    const stored: History = { version: 1, chats: [{ id: '-10', type: 'group', name: 'Моя группа', messages: [] }] };
+    const event = normalizeNotification({ ...textBody, senderData: { chatId: '-10', chatType: 'group', senderName: 'Анна' } });
+    if (event.kind !== 'message') throw new Error('expected message');
+    expect(upsertMessage(stored, event).history.chats[0].name).toBe('Моя группа');
+  });
+
+  it('retains the known bot type when a notification has no chatType', () => {
+    const stored: History = { version: 1, chats: [{ id: '10', type: 'bot', name: 'Бот', messages: [] }] };
+    const event = normalizeNotification({ ...textBody, senderData: { chatId: '10', chatName: 'Бот' } });
+    if (event.kind !== 'message') throw new Error('expected message');
+    expect(upsertMessage(stored, event).history.chats[0].type).toBe('bot');
+  });
+
+  it('updates a negative group message status', () => {
+    const stored: History = { version: 1, chats: [{ id: '-10', type: 'group', name: 'Группа', messages: [{
+      id: 'out-to-group', chatId: '-10', text: 'Привет', direction: 'outgoing', timestamp: 1, status: 'queued',
+    }] }] };
+    const event = normalizeNotification({ typeWebhook: 'outgoingMessageStatus', chatId: '-10', idMessage: 'out-to-group', status: 'sent' });
+    if (event.kind !== 'status') throw new Error('expected status');
+    expect(applyStatus(stored, event).chats[0].messages[0].status).toBe('sent');
   });
 
   it('adds an unknown incoming chat and deduplicates a replayed message', () => {

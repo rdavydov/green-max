@@ -354,6 +354,10 @@ export function useMessenger(): Messenger {
     if (!session || !session.ready || !isCurrent(session) || session.busy.has(chatId)) return false;
     if (session.paused) { setError('Сначала восстановите сохранение истории кнопкой «Повторить».'); return false; }
     if (!session.history.chats.some(chat => chat.id === chatId)) return false;
+    if (session.history.chats.find(chat => chat.id === chatId)?.type === 'channel') {
+      setError('Канал доступен только для чтения.');
+      return false;
+    }
     if (!text.trim() || text.length > 4000) { setError('Сообщение должно содержать от 1 до 4000 символов.'); return false; }
     setError(null);
     const localId = `local:${crypto.randomUUID()}`;

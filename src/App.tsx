@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
 import type { Chat, Message, MessageStatus, Messenger } from './core/types';
 import { useMessenger } from './core/useMessenger';
+import { ThemeSwitcher } from './ThemeSwitcher';
 import './styles.css';
 
 const MAX_MESSAGE_LENGTH = 4000;
@@ -26,7 +27,7 @@ function Brand({ large = false }: { large?: boolean }) {
   const gradientId = useId();
   return <div className={`brand${large ? ' brand-large' : ''}`}>
     <svg className="brand-mark" viewBox="0 0 48 48" aria-hidden="true">
-      <defs><linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1"><stop stopColor="#18d7bd" /><stop offset="1" stopColor="#2589f8" /></linearGradient></defs>
+      <defs><linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1"><stop stopColor="var(--brand-start)" /><stop offset="1" stopColor="var(--brand-end)" /></linearGradient></defs>
       <rect width="48" height="48" rx="16" fill={`url(#${gradientId})`} />
       <path d="M13 32V17h4l7 9 7-9h4v15h-4V23l-7 9-7-9v9Z" fill="white" />
     </svg>
@@ -40,8 +41,10 @@ function Avatar({ chat, large = false }: { chat: Chat; large?: boolean }) {
   return <span className={`avatar${large ? ' avatar-large' : ''}`} aria-hidden="true">{initials || 'М'}</span>;
 }
 
-function ErrorMessage({ children }: { children: ReactNode }) {
-  return <p className="form-error" role="alert">{children}</p>;
+function ErrorMessage({ children, onDismiss }: { children: ReactNode; onDismiss: () => void }) {
+  const [closed, setClosed] = useState(false);
+  if (closed) return null;
+  return <div className="form-error" role="alert"><p>{children}</p><button className="icon-button" type="button" aria-label="Скрыть ошибку" onClick={() => { setClosed(true); onDismiss(); }}><Icon name="close" /></button></div>;
 }
 
 function Login({ connecting, error, onLogin, onClearError }: { connecting: boolean; error: string | null; onLogin: (id: string, token: string) => Promise<boolean>; onClearError: () => void }) {
@@ -65,6 +68,7 @@ function Login({ connecting, error, onLogin, onClearError }: { connecting: boole
     <div className="login-decoration login-decoration-one" aria-hidden="true" />
     <div className="login-decoration login-decoration-two" aria-hidden="true" />
     <section className="login-card" aria-labelledby="login-heading">
+      <ThemeSwitcher />
       <Brand large />
       <div className="login-copy"><h1 id="login-heading">Ваши сообщения.<br />В одном окне.</h1><p>Подключите аккаунт GREEN-API,<br className="desktop-break" /> чтобы общаться в MAX.</p></div>
       <form onSubmit={submit} className="login-form">
@@ -72,7 +76,7 @@ function Login({ connecting, error, onLogin, onClearError }: { connecting: boole
         <input id="instance-id" name="idInstance" value={idInstance} onChange={(event) => { setIdInstance(event.target.value); setValidation(null); }} inputMode="numeric" autoComplete="off" placeholder="ID вашего инстанса" disabled={connecting} required />
         <label htmlFor="instance-token">apiTokenInstance</label>
         <input id="instance-token" name="apiTokenInstance" type="password" value={apiTokenInstance} onChange={(event) => { setApiTokenInstance(event.target.value); setValidation(null); }} autoComplete="off" placeholder="Токен вашего инстанса" disabled={connecting} required />
-        {(validation || error) && <ErrorMessage>{validation || error}</ErrorMessage>}
+        {(validation || error) && <ErrorMessage key={validation || error} onDismiss={() => { setValidation(null); onClearError(); }}>{validation || error}</ErrorMessage>}
         <button type="submit" className="button button-primary login-submit" disabled={connecting}>{connecting ? <><span className="spinner" aria-hidden="true" />Подключаемся…</> : 'Подключиться'}</button>
       </form>
       <p className="login-help">Данные инстанса доступны в <a href="https://console.green-api.com/" target="_blank" rel="noreferrer">личном кабинете GREEN-API</a>.</p>
@@ -124,7 +128,7 @@ function NewChatDialog({ error, onCreate, onClose, onClearError }: { error: stri
         <label htmlFor="recipient-phone">Номер телефона</label>
         <input id="recipient-phone" type="tel" name="phone" autoComplete="tel" placeholder="+7 999 123-45-67" value={phone} onChange={(event) => { setPhone(event.target.value); onClearError(); }} disabled={busy} aria-describedby="phone-hint" required />
         <p className="field-hint" id="phone-hint">Россия (+7) или Беларусь (+375)</p>
-        {error && <ErrorMessage>{error}</ErrorMessage>}
+        {error && <ErrorMessage key={error} onDismiss={onClearError}>{error}</ErrorMessage>}
         <button className="button button-primary dialog-submit" type="submit" disabled={busy}>{busy ? 'Создаём чат…' : 'Создать чат'}</button>
       </form>
     </div>
@@ -133,11 +137,12 @@ function NewChatDialog({ error, onCreate, onClose, onClearError }: { error: stri
 
 const statusLabels: Record<MessageStatus, string> = { sending: 'Отправляется', queued: 'В очереди', sent: 'Отправлено', delivered: 'Доставлено', read: 'Прочитано', failed: 'Не отправлено', uncertain: 'Отправка не подтверждена' };
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({ message, showAuthor }: { message: Message; showAuthor: boolean }) {
   const outgoing = message.direction === 'outgoing';
   const problem = message.status === 'failed' || message.status === 'uncertain';
   return <div className={`message-row ${outgoing ? 'message-outgoing' : 'message-incoming'}`} data-message-id={message.id}>
     <div className={`message-bubble${problem ? ' message-problem' : ''}`}>
+      {showAuthor && !outgoing && message.senderName && <p className="message-author">{message.senderName}</p>}
       <p className="message-text">{message.text}</p>
       <div className="message-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{timeFormatter.format(message.timestamp)}</time>
         {outgoing && <span className={`message-status status-${message.status}`} title={message.error || statusLabels[message.status]} aria-label={statusLabels[message.status]}>
@@ -153,7 +158,11 @@ function Conversation({ chat, draft, pending, loading, onDraft, onSend, onBack }
   const messageList = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const overLimit = draft.length > MAX_MESSAGE_LENGTH;
-  const canSend = !pending && !overLimit && Boolean(draft.trim());
+  const readOnly = chat.type === 'channel';
+  const canSend = !readOnly && !pending && !overLimit && Boolean(draft.trim());
+  const [lengthErrorClosed, setLengthErrorClosed] = useState(false);
+
+  useEffect(() => { setLengthErrorClosed(false); }, [chat.id, overLimit]);
 
   useEffect(() => {
     messageEnd.current?.scrollIntoView?.({ block: 'end' });
@@ -175,27 +184,27 @@ function Conversation({ chat, draft, pending, loading, onDraft, onSend, onBack }
     <header className="conversation-header">
       <button type="button" className="icon-button mobile-back" aria-label="Назад к чатам" onClick={onBack}><Icon name="back" /></button>
       <Avatar chat={chat} />
-      <div className="conversation-contact"><h2>{chat.name}</h2><p>{chat.phone ? `+${chat.phone}` : 'Личный чат MAX'}</p></div>
+      <div className="conversation-contact"><h2>{chat.name}</h2><p>{chat.type === 'group' ? 'Групповой чат' : chat.type === 'channel' ? 'Канал' : chat.type === 'bot' ? 'Бот' : chat.phone ? `+${chat.phone}` : 'Личный чат MAX'}</p></div>
       <span className="conversation-badge">MAX</span>
     </header>
     <div className="messages" ref={messageList} role="log" aria-label="Сообщения" aria-live="polite" aria-relevant="additions">
-      {chat.messages.length === 0 ? <div className="conversation-start"><span><Icon name="chat" /></span>{loading ? <p role="status">Загружаем сообщения…</p> : <><h3>Начните разговор</h3><p>Отправьте первое сообщение {chat.name}.</p></>}</div> : chat.messages.map((message, index) => {
+      {chat.messages.length === 0 ? <div className="conversation-start"><span><Icon name="chat" /></span>{loading ? <p role="status">Загружаем сообщения…</p> : <><h3>{readOnly ? 'Пока нет текстовых сообщений' : 'Начните разговор'}</h3><p>{readOnly ? 'Новые публикации появятся здесь.' : `Отправьте первое сообщение ${chat.name}.`}</p></>}</div> : chat.messages.map((message, index) => {
         const previous = chat.messages[index - 1];
         const newDay = !previous || new Date(previous.timestamp).toDateString() !== new Date(message.timestamp).toDateString();
         return <div className="message-group" key={`${message.chatId}:${message.id}`}>
           {newDay && <div className="date-divider"><span>{dateFormatter.format(message.timestamp)}</span></div>}
-          <MessageBubble message={message} />
+          <MessageBubble message={message} showAuthor={chat.type === 'group'} />
         </div>;
       })}
       <div ref={messageEnd} />
     </div>
-    <form className="composer" onSubmit={(event) => { event.preventDefault(); if (canSend) onSend(); }}>
+    {readOnly ? <p className="conversation-readonly">Канал доступен только для чтения</p> : <form className="composer" onSubmit={(event) => { event.preventDefault(); if (canSend) onSend(); }}>
       <div className={`composer-input-wrap${overLimit ? ' composer-invalid' : ''}`}>
-        <textarea ref={composer} aria-label="Сообщение" placeholder="Напишите сообщение…" value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={keyboard} disabled={pending} rows={1} aria-invalid={overLimit} aria-describedby={overLimit ? 'message-length-error' : 'composer-hint'} />
+        <textarea ref={composer} aria-label="Сообщение" placeholder="Напишите сообщение…" value={draft} onChange={(event) => onDraft(event.target.value)} onKeyDown={keyboard} disabled={pending} rows={1} aria-invalid={overLimit} aria-describedby={overLimit && !lengthErrorClosed ? 'message-length-error' : 'composer-hint'} />
         <button type="submit" className="send-button" aria-label="Отправить" title="Отправить сообщение" disabled={!canSend}>{pending ? <span className="spinner" aria-hidden="true" /> : <Icon name="send" />}</button>
       </div>
-      <div className="composer-footer">{overLimit ? <p id="message-length-error" className="composer-error" role="alert">Максимум 4000 символов</p> : <p id="composer-hint">Enter — отправить · Shift + Enter — новая строка</p>}<span className={overLimit ? 'character-count over-limit' : 'character-count'}>{draft.length > 0 ? `${draft.length} / 4000` : ''}</span></div>
-    </form>
+      <div className="composer-footer">{overLimit && !lengthErrorClosed ? <div id="message-length-error" className="composer-error" role="alert"><span>Максимум 4000 символов</span><button type="button" className="icon-button" aria-label="Скрыть ошибку" onClick={() => setLengthErrorClosed(true)}><Icon name="close" /></button></div> : <p id="composer-hint">Enter — отправить · Shift + Enter — новая строка</p>}<span className={overLimit ? 'character-count over-limit' : 'character-count'}>{draft.length > 0 ? `${draft.length} / 4000` : ''}</span></div>
+    </form>}
   </section>;
 }
 
@@ -203,6 +212,8 @@ function ChatWorkspace({ messenger }: { messenger: Messenger }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [noticeClosed, setNoticeClosed] = useState(false);
+  const [connectionCollapsed, setConnectionCollapsed] = useState(false);
   const sendInFlight = useRef(new Set<string>());
   const mounted = useRef(true);
   const selectedChat = messenger.chats.find((chat) => chat.id === selectedId);
@@ -234,7 +245,7 @@ function ChatWorkspace({ messenger }: { messenger: Messenger }) {
   }
 
   async function sendMessage() {
-    if (!selectedChat || sendInFlight.current.has(selectedChat.id)) return;
+    if (!selectedChat || selectedChat.type === 'channel' || sendInFlight.current.has(selectedChat.id)) return;
     const chatId = selectedChat.id;
     const text = drafts[chatId] || '';
     if (!text.trim() || text.length > MAX_MESSAGE_LENGTH) return;
@@ -245,28 +256,39 @@ function ChatWorkspace({ messenger }: { messenger: Messenger }) {
     } finally { sendInFlight.current.delete(chatId); }
   }
 
+  function retry() {
+    setConnectionCollapsed(false);
+    messenger.retry();
+  }
+
+  const connectionBanner = messenger.connection.status !== 'online' && (connectionCollapsed
+    ? <div data-notice="connection-summary" className={`connection-banner ${messenger.connection.status}`}><span>{messenger.connection.status === 'storage-error' ? 'Получение приостановлено' : 'Восстанавливаем соединение'}</span><button type="button" onClick={retry}>Повторить</button><button type="button" className="icon-button" aria-label="Развернуть уведомление" onClick={() => setConnectionCollapsed(false)}><Icon name="plus" /></button></div>
+    : <div data-notice="connection" className={`connection-banner ${messenger.connection.status}`} role={messenger.connection.status === 'storage-error' ? 'alert' : 'status'}><span>{messenger.connection.message || (messenger.connection.status === 'reconnecting' ? 'Соединение прервано. Пробуем подключиться снова…' : 'Не удалось сохранить историю. Освободите место в браузере, затем повторите попытку.')}</span><button type="button" onClick={retry}>Повторить</button><button type="button" className="icon-button" aria-label="Свернуть уведомление" onClick={() => setConnectionCollapsed(true)}><Icon name="close" /></button></div>);
+
   return <main className={`chat-app${selectedChat ? ' has-selection' : ''}`}>
     <aside className="sidebar" aria-label="Чаты">
       <header className="sidebar-header"><Brand /><button type="button" className="icon-button logout-button" onClick={logout} aria-label="Выйти" title="Выйти"><Icon name="logout" /></button></header>
+      <ThemeSwitcher />
       <div className="sidebar-heading"><h1>Сообщения</h1><span>{messenger.chats.length}</span></div>
       <div className="new-chat-wrap"><button type="button" className="button new-chat-button" onClick={() => { messenger.clearError(); setNewChatOpen(true); }}><Icon name="plus" />Новый чат</button></div>
-      {messenger.notice && <p className="settings-note" role="status">{messenger.notice} <a href="https://github.com/rdavydov/green-max#настройка-green-api" target="_blank" rel="noreferrer">Настройка</a></p>}
+      {messenger.notice && !noticeClosed && <div className="settings-note" role="status" data-notice="settings"><p>{messenger.notice} <a href="https://github.com/rdavydov/green-max#настройка-green-api" target="_blank" rel="noreferrer">Настройка</a></p><button type="button" className="icon-button" aria-label="Скрыть уведомление" onClick={() => setNoticeClosed(true)}><Icon name="close" /></button></div>}
+      {!selectedChat && connectionBanner}
       {messenger.error && !newChatOpen && !selectedChat && <div className="error-banner" role="alert"><span>{messenger.error}</span><button type="button" className="icon-button" aria-label="Скрыть ошибку" onClick={messenger.clearError}><Icon name="close" /></button></div>}
       <nav className="chat-list" aria-label="Список чатов">
         {orderedChats.length ? orderedChats.map((chat) => {
           const last = chat.messages.at(-1);
           return <button key={chat.id} type="button" data-chat-id={chat.id} className={`chat-list-item${chat.id === selectedId ? ' selected' : ''}`} onClick={() => selectChat(chat.id)} aria-current={chat.id === selectedId ? 'true' : undefined}>
             <Avatar chat={chat} />
-            <span className="chat-list-content"><span className="chat-list-top"><span className="chat-name">{chat.name}</span>{last && <time dateTime={new Date(last.timestamp).toISOString()}>{timeFormatter.format(last.timestamp)}</time>}</span><span className="chat-preview">{last ? `${last.direction === 'outgoing' ? 'Вы: ' : ''}${last.text}` : 'Пока нет сообщений'}</span></span>
+            <span className="chat-list-content"><span className="chat-list-top"><span className="chat-name">{chat.name}</span>{chat.type && chat.type !== 'user' && <span className="chat-kind">{chat.type === 'group' ? 'Группа' : chat.type === 'channel' ? 'Канал' : 'Бот'}</span>}{last && <time dateTime={new Date(last.timestamp).toISOString()}>{timeFormatter.format(last.timestamp)}</time>}</span><span className="chat-preview">{last ? `${last.direction === 'outgoing' ? 'Вы: ' : ''}${last.text}` : 'Пока нет сообщений'}</span></span>
           </button>;
         }) : <div className="empty-sidebar"><Icon name="chat" /><p>Здесь появятся ваши чаты</p><span>Создайте первый чат<br />по номеру телефона.</span></div>}
       </nav>
-      <footer className="sidebar-footer"><span className={`connection-dot ${messenger.connection.status}`} /><span>{messenger.connection.status === 'online' ? 'Подключено к GREEN-API' : messenger.connection.status === 'reconnecting' ? 'Восстанавливаем соединение' : 'Получение приостановлено'}</span>{messenger.connection.status !== 'online' && <button type="button" onClick={messenger.retry}>Повторить</button>}</footer>
+      <footer className="sidebar-footer"><span className={`connection-dot ${messenger.connection.status}`} /><span>{messenger.connection.status === 'online' ? 'Подключено к GREEN-API' : messenger.connection.status === 'reconnecting' ? 'Восстанавливаем соединение' : 'Получение приостановлено'}</span>{messenger.connection.status !== 'online' && <button type="button" onClick={retry}>Повторить</button>}</footer>
     </aside>
     <div className="chat-main">
-      {messenger.connection.status !== 'online' && <div className={`connection-banner ${messenger.connection.status}`} role={messenger.connection.status === 'storage-error' ? 'alert' : 'status'}><span>{messenger.connection.message || (messenger.connection.status === 'reconnecting' ? 'Соединение прервано. Пробуем подключиться снова…' : 'Не удалось сохранить историю. Освободите место в браузере, затем повторите попытку.')}</span><button type="button" onClick={messenger.retry}>Повторить</button></div>}
+      {selectedChat && connectionBanner}
       {messenger.error && !newChatOpen && selectedChat && <div className="error-banner" role="alert"><span>{messenger.error}</span><button type="button" className="icon-button" aria-label="Скрыть ошибку" onClick={messenger.clearError}><Icon name="close" /></button></div>}
-      {selectedChat ? <Conversation chat={selectedChat} draft={drafts[selectedChat.id] || ''} pending={messenger.busyChatIds.includes(selectedChat.id)} loading={messenger.loadingChatIds?.includes(selectedChat.id) ?? false} onDraft={(value) => setDrafts((current) => ({ ...current, [selectedChat.id]: value }))} onSend={() => { void sendMessage(); }} onBack={() => setSelectedId(null)} /> : <section className="welcome-panel" aria-labelledby="welcome-heading"><div className="welcome-symbol"><Icon name="chat" /></div><h2 id="welcome-heading">Всегда на связи</h2><p>Выберите чат слева или начните<br />новый разговор в MAX.</p><button className="button button-primary" type="button" onClick={() => { messenger.clearError(); setNewChatOpen(true); }}><Icon name="plus" />Начать разговор</button><span className="welcome-footnote">Личные чаты · Только текстовые сообщения</span></section>}
+      {selectedChat ? <Conversation chat={selectedChat} draft={drafts[selectedChat.id] || ''} pending={messenger.busyChatIds.includes(selectedChat.id)} loading={messenger.loadingChatIds?.includes(selectedChat.id) ?? false} onDraft={(value) => setDrafts((current) => ({ ...current, [selectedChat.id]: value }))} onSend={() => { void sendMessage(); }} onBack={() => setSelectedId(null)} /> : <section className="welcome-panel" aria-labelledby="welcome-heading"><div className="welcome-symbol"><Icon name="chat" /></div><h2 id="welcome-heading">Всегда на связи</h2><p>Выберите чат слева или начните<br />новый разговор в MAX.</p><button className="button button-primary" type="button" onClick={() => { messenger.clearError(); setNewChatOpen(true); }}><Icon name="plus" />Начать разговор</button><span className="welcome-footnote">Чаты, группы, каналы и боты · Текстовые сообщения</span></section>}
     </div>
     {newChatOpen && <NewChatDialog error={messenger.error ?? (messenger.connection.status === 'storage-error' ? messenger.connection.message ?? 'Не удалось сохранить историю в браузере. Закройте окно, освободите место и нажмите «Повторить».' : null)} onCreate={createChat} onClearError={messenger.clearError} onClose={() => { setNewChatOpen(false); messenger.clearError(); }} />}
   </main>;

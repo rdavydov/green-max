@@ -1,4 +1,4 @@
-import type { Chat, Credentials, Message, MessageStatus } from './types';
+import { isChatId, isChatType, type Chat, type Credentials, type Message, type MessageStatus } from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -90,14 +90,14 @@ function parseRemoteChats(value: unknown): Chat[] {
   const chats = new Map<string, Chat>();
   for (const item of value) {
     const data = record(item);
-    if (!data || data.type !== 'user') continue;
-    if (typeof data.chatId !== 'string' || !/^\d+$/.test(data.chatId)
+    if (!data || !isChatType(data.type)) continue;
+    if (!isChatId(data.chatId)
       || typeof data.name !== 'string') throw protocolError();
     const phone = typeof data.phoneNumber === 'number' || typeof data.phoneNumber === 'string'
       ? String(data.phoneNumber) : '';
     chats.set(data.chatId, {
-      id: data.chatId, name: data.name || (phone !== '0' && phone ? `+${phone}` : data.chatId),
-      ...(/^[1-9]\d*$/.test(phone) ? { phone } : {}), messages: [],
+      id: data.chatId, type: data.type, name: data.name || (data.type === 'user' && phone !== '0' && phone ? `+${phone}` : data.chatId),
+      ...(data.type === 'user' && /^[1-9]\d*$/.test(phone) ? { phone } : {}), messages: [],
     });
   }
   return [...chats.values()];
@@ -108,7 +108,7 @@ function parseRemoteHistory(value: unknown, chatId: string): Message[] {
   const messages = new Map<string, Message>();
   for (const item of value) {
     const data = record(item);
-    if (!data || data.chatId !== chatId || data.chatType !== undefined && data.chatType !== 'user'
+    if (!data || data.chatId !== chatId || data.chatType !== undefined && !isChatType(data.chatType)
       || data.isDeleted === true
       || data.typeMessage !== 'textMessage' && data.typeMessage !== 'extendedTextMessage') continue;
     const text = typeof data.textMessage === 'string' ? data.textMessage : record(data.extendedTextMessage)?.text;
@@ -122,6 +122,8 @@ function parseRemoteHistory(value: unknown, chatId: string): Message[] {
           : data.statusMessage === 'sent' || data.statusMessage === '' || data.statusMessage === undefined ? 'sent' : 'uncertain';
     messages.set(data.idMessage, {
       id: data.idMessage, chatId, direction: data.type, text, timestamp: data.timestamp * 1000, status,
+      ...(data.type === 'incoming' && typeof data.senderName === 'string' && data.senderName
+        ? { senderName: data.senderName } : {}),
       ...(status === 'failed' ? { error: 'MAX не смог доставить сообщение.' } : {}),
     });
   }

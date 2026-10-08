@@ -24,7 +24,7 @@ test('существующие чаты и Избранное загружают
   await login(page);
   await expect(page.locator('[data-chat-id="10001"]')).toContainText('Анна');
   await expect(page.locator('[data-chat-id="999"]')).toContainText('Избранное');
-  await expect(page.getByText('Группа MAX', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-chat-id="-10003"]')).toContainText('Группа MAX');
   await page.locator('[data-chat-id="10001"]').click();
   await expect(page.locator('[data-message-id="old-outgoing"]')).toContainText('Отправлено');
   await expect(page.locator('[data-message-id="old-incoming"]')).toContainText('Старая ссылка https://example.org');

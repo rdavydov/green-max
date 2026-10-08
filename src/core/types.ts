@@ -4,6 +4,15 @@ export interface Credentials {
 }
 
 export type MessageStatus = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'uncertain';
+export type ChatType = 'user' | 'group' | 'channel' | 'bot';
+
+export function isChatType(value: unknown): value is ChatType {
+  return value === 'user' || value === 'group' || value === 'channel' || value === 'bot';
+}
+
+export function isChatId(value: unknown): value is string {
+  return typeof value === 'string' && /^-?\d+$/.test(value);
+}
 
 export interface Message {
   id: string;
@@ -12,6 +21,7 @@ export interface Message {
   text: string;
   timestamp: number;
   status: MessageStatus;
+  senderName?: string;
   error?: string;
 }
 
@@ -19,6 +29,7 @@ export interface Chat {
   id: string;
   phone?: string;
   name: string;
+  type?: ChatType;
   messages: Message[];
 }
 

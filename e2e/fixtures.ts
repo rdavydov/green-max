@@ -14,7 +14,10 @@ export function incomingText(
   text: string,
   chatId = '10001',
   withUrl = false,
+  chat: { type?: 'user' | 'group' | 'channel' | 'bot'; name?: string; senderName?: string; senderId?: string } = {},
 ): Notification {
+  const name = chat.name ?? (chatId === '10001' ? 'Анна' : 'Михаил');
+  const type = chat.type ?? 'user';
   return {
     receiptId,
     body: {
@@ -24,13 +27,13 @@ export function incomingText(
       idMessage,
       senderData: {
         chatId,
-        chatName: chatId === '10001' ? 'Анна' : 'Михаил',
-        chatType: 'user',
-        sender: chatId,
-        senderName: chatId === '10001' ? 'Анна' : 'Михаил',
-        senderType: 'user',
+        chatName: name,
+        chatType: type,
+        sender: chat.senderId ?? chatId,
+        senderName: chat.senderName ?? name,
+        senderType: type === 'bot' ? 'bot' : 'user',
         senderContactName: '',
-        senderPhoneNumber: chatId === '10001' ? 79991234567 : 79997654321,
+        senderPhoneNumber: type === 'user' ? (chatId === '10001' ? 79991234567 : 79997654321) : 0,
       },
       messageData: withUrl
         ? { typeMessage: 'extendedTextMessage', extendedTextMessageData: { text } }
@@ -61,6 +64,10 @@ export class GreenApiFixture {
   chats: Record<string, unknown>[] = [];
   readonly chatHistory = new Map<string, Record<string, unknown>[]>();
   account = { chatId: '999', phone: '79990000000', stateInstance: 'authorized' };
+  settings = {
+    typeInstance: 'v3', incomingWebhook: 'yes', outgoingWebhook: 'yes',
+    outgoingAPIMessageWebhook: 'yes', outgoingMessageWebhook: 'yes', webhookUrl: '',
+  };
   checkAccountDelayMs = 0;
   failNextSend = false;
   holdDeletes = false;
@@ -85,14 +92,7 @@ export class GreenApiFixture {
           await this.json(route, { stateInstance: 'authorized' });
           break;
         case 'getsettings':
-          await this.json(route, {
-            typeInstance: 'v3',
-            incomingWebhook: 'yes',
-            outgoingWebhook: 'yes',
-            outgoingAPIMessageWebhook: 'yes',
-            outgoingMessageWebhook: 'yes',
-            webhookUrl: '',
-          });
+          await this.json(route, this.settings);
           break;
         case 'getaccountsettings':
           await this.json(route, this.account);
@@ -159,6 +159,13 @@ export class GreenApiFixture {
 
   get pendingReceives() {
     return this.pending.size;
+  }
+
+  async failPendingReceive() {
+    await this.waitForPoll();
+    const [request, route] = this.pending.entries().next().value as [Request, Route];
+    this.pending.delete(request);
+    await route.abort('failed');
   }
 
   async releaseDeletes() {

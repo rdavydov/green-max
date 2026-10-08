@@ -32,6 +32,19 @@ describe('MAX chat synchronization', () => {
     expect(mergeRemoteChats(history(), [{ id: '100', name: '100', messages: [] }]).chats[0].name).toBe('+79991234567');
   });
 
+  it('retains known nonpersonal chat types when merging a legacy chat without a type', () => {
+    const stored: History = { version: 1, chats: [{ id: '-100', type: 'channel', name: 'Канал', messages: [] }] };
+    const merged = mergeRemoteChats(stored, [{ id: '-100', name: 'Канал', messages: [] }]);
+    expect(merged.chats[0].type).toBe('channel');
+  });
+
+  it('merges group text without changing the group to a personal chat', () => {
+    const stored: History = { version: 1, chats: [{ id: '-100', type: 'group', name: 'Группа', messages: [] }] };
+    const merged = mergeRemoteHistory(stored, '-100', [message({ chatId: '-100', direction: 'incoming', senderName: 'Анна' })]);
+    expect(merged.chats[0].type).toBe('group');
+    expect(merged.chats[0].messages[0].senderName).toBe('Анна');
+  });
+
   it('deduplicates imported text and preserves a newer delivered status', () => {
     const first = mergeRemoteHistory(history(), '100', [message({ status: 'sent' }), message({ id: 'message-2', timestamp: 50_000 })]);
     const second = mergeRemoteHistory(first, '100', [message({ status: 'sent' })]);

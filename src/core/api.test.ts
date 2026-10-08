@@ -74,19 +74,46 @@ describe('GREEN-API MAX client', () => {
     catch (error) { expect((error as Error).message).not.toContain(credentials.apiTokenInstance); }
   });
 
-  it('loads personal chats and preserves hidden phone numbers as absent', async () => {
+  it('loads personal, group, channel and bot chats and preserves hidden phone numbers as absent', async () => {
     const fetch = vi.fn().mockResolvedValue(response([
       { chatId: '10000000000000001', name: 'Анна', type: 'user', phoneNumber: 79991234567 },
       { chatId: '10000000000000002', name: 'Скрытый номер', type: 'user', phoneNumber: 0 },
       { chatId: '-123', name: 'Группа', type: 'group', phoneNumber: 0 },
       { chatId: '300', name: 'Бот', type: 'bot', phoneNumber: 0 },
+      { chatId: '-124', name: 'Канал', type: 'channel', phoneNumber: 0 },
     ]));
     vi.stubGlobal('fetch', fetch);
     await expect(createGreenApi(credentials).getChats(signal())).resolves.toEqual([
-      { id: '10000000000000001', name: 'Анна', phone: '79991234567', messages: [] },
-      { id: '10000000000000002', name: 'Скрытый номер', messages: [] },
+      { id: '10000000000000001', type: 'user', name: 'Анна', phone: '79991234567', messages: [] },
+      { id: '10000000000000002', type: 'user', name: 'Скрытый номер', messages: [] },
+      { id: '-123', type: 'group', name: 'Группа', messages: [] },
+      { id: '300', type: 'bot', name: 'Бот', messages: [] },
+      { id: '-124', type: 'channel', name: 'Канал', messages: [] },
     ]);
     expect(fetch.mock.calls[0][0]).toContain('/getChats/');
+  });
+
+  it.each(['group', 'channel', 'bot'])('retrieves %s history and retains the incoming sender name', async chatType => {
+    const chatId = chatType === 'bot' ? '10002' : '-10000000000000001';
+    const fetch = vi.fn().mockResolvedValue(response([{
+      chatId, chatType, idMessage: 'text-from-chat', type: 'incoming', timestamp: 100,
+      typeMessage: 'textMessage', textMessage: 'Текст чата', senderName: 'Анна',
+    }]));
+    vi.stubGlobal('fetch', fetch);
+    await expect(createGreenApi(credentials).getChatHistory(chatId, signal())).resolves.toEqual([{
+      chatId, id: 'text-from-chat', direction: 'incoming', timestamp: 100_000,
+      text: 'Текст чата', status: 'delivered', senderName: 'Анна',
+    }]);
+    expect(fetch.mock.calls[0][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ chatId, count: 100 }) }));
+  });
+
+  it('keeps a negative group chat ID as a string when sending', async () => {
+    const fetch = vi.fn().mockResolvedValue(response({ idMessage: 'sent-to-group' }));
+    vi.stubGlobal('fetch', fetch);
+    await expect(createGreenApi(credentials).sendMessage('-10000000000000001', 'Всем привет', signal())).resolves.toBe('sent-to-group');
+    expect(fetch.mock.calls[0][1]).toEqual(expect.objectContaining({
+      body: '{"chatId":"-10000000000000001","message":"Всем привет"}',
+    }));
   });
 
   it('retrieves the account chat ID for identifying Favorites', async () => {
